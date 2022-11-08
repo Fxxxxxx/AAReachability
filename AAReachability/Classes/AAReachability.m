@@ -12,7 +12,8 @@
 
 
 @interface AAReachability ()
-- (BOOL)updateCurrentReachabilityStatus;
+- (void)updateCurrentReachabilityStatus;
++ (dispatch_queue_t)aaReachabilityQueue;
 @end
 
 static void ReachabilityCallback(SCNetworkReachabilityRef target, SCNetworkReachabilityFlags flags, void* info) {
@@ -21,10 +22,9 @@ static void ReachabilityCallback(SCNetworkReachabilityRef target, SCNetworkReach
     NSCAssert([(__bridge NSObject*) info isKindOfClass: [AAReachability class]], @"info was wrong class in ReachabilityCallback");
 
     AAReachability* noteObject = (__bridge AAReachability *)info;
-    // Post a notification to notify the client that the network reachability changed.
-    if ([noteObject updateCurrentReachabilityStatus]) {
-        [[NSNotificationCenter defaultCenter] postNotificationName: AAReachabilityNetworkChangedNotification object: noteObject];
-    }
+    dispatch_async([AAReachability aaReachabilityQueue], ^{
+        [noteObject updateCurrentReachabilityStatus];
+    });
 }
 
 @implementation AAReachability {
@@ -33,33 +33,15 @@ static void ReachabilityCallback(SCNetworkReachabilityRef target, SCNetworkReach
     dispatch_semaphore_t _statusSemaphore;
 }
 
+#pragma mark - init
 + (instancetype)reachabilityWithHostName:(NSString *)hostName {
     SCNetworkReachabilityRef reachability = SCNetworkReachabilityCreateWithName(NULL, [hostName UTF8String]);
     return [[self alloc] initWithRef:reachability];
 }
 
-
 + (instancetype)reachabilityWithAddress:(const struct sockaddr *)hostAddress {
     SCNetworkReachabilityRef reachability = SCNetworkReachabilityCreateWithAddress(kCFAllocatorDefault, hostAddress);
     return [[self alloc] initWithRef:reachability];
-}
-
-- (instancetype)initWithRef:(SCNetworkReachabilityRef)ref {
-    if (ref == NULL) {
-        return NULL;
-    }
-    self = [super init];
-    if (self) {
-        _reachabilityRef = ref;
-        _statusSemaphore = dispatch_semaphore_create(1);
-        [self updateCurrentReachabilityStatus];
-        if (![self startNotifier]) {
-            [self startNotifier];
-        }
-    } else {
-        CFRelease(ref);
-    }
-    return self;
 }
 
 + (instancetype)reachabilityForInternetConnection {
@@ -74,6 +56,55 @@ static void ReachabilityCallback(SCNetworkReachabilityRef target, SCNetworkReach
         instance = [self reachabilityWithAddress: (const struct sockaddr *) &zeroAddress];
     });
     return instance;
+}
+
+- (instancetype)initWithRef:(SCNetworkReachabilityRef)ref {
+    if (ref == NULL) {
+        return NULL;
+    }
+    self = [super init];
+    if (self) {
+        _reachabilityRef = ref;
+        _statusSemaphore = dispatch_semaphore_create(1);
+        [self updateCurrentReachabilityStatus];
+        if (![self startNotifier]) {
+            [self startNotifier];
+        }
+        
+        // add notification observer
+        if (@available(iOS 12.0, *)) {
+            [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(radioAccessChanged) name:CTServiceRadioAccessTechnologyDidChangeNotification object:nil];
+        } else {
+            [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(radioAccessChanged) name:CTRadioAccessTechnologyDidChangeNotification object:nil];
+        }
+    } else {
+        CFRelease(ref);
+    }
+    return self;
+}
+
+- (BOOL)connectionRequired {
+    NSAssert(_reachabilityRef != NULL, @"connectionRequired called with NULL reachabilityRef");
+    SCNetworkReachabilityFlags flags;
+    if (SCNetworkReachabilityGetFlags(_reachabilityRef, &flags)) {
+        return (flags & kSCNetworkReachabilityFlagsConnectionRequired);
+    }
+    return NO;
+}
+
+#pragma mark - setup
++ (void)setup {
+    dispatch_async([self aaReachabilityQueue], ^{
+        [AAReachability reachabilityForInternetConnection];
+    });
+}
+
+#pragma mark - dealloc
+- (void)dealloc {
+    [self stopNotifier];
+    if (_reachabilityRef != NULL) {
+        CFRelease(_reachabilityRef);
+    }
 }
 
 #pragma mark - Start and stop notifier
@@ -95,14 +126,7 @@ static void ReachabilityCallback(SCNetworkReachabilityRef target, SCNetworkReach
     }
 }
 
-- (void)dealloc {
-    [self stopNotifier];
-    if (_reachabilityRef != NULL) {
-        CFRelease(_reachabilityRef);
-    }
-}
-
-
+#pragma mark - update status
 - (AANetworkStatus)currentReachabilityStatus {
     AANetworkStatus result;
     dispatch_semaphore_wait(_statusSemaphore, DISPATCH_TIME_FOREVER);
@@ -111,19 +135,31 @@ static void ReachabilityCallback(SCNetworkReachabilityRef target, SCNetworkReach
     return result;
 }
 
-- (BOOL)updateCurrentReachabilityStatus {
+- (void)setCurrentReachabilityStatus:(AANetworkStatus)status {
+    BOOL isChanged = NO;
+    dispatch_semaphore_wait(_statusSemaphore, DISPATCH_TIME_FOREVER);
+    if (status != _currentReachabilityStatus) {
+        isChanged = YES;
+        _currentReachabilityStatus = status;
+    }
+    dispatch_semaphore_signal(_statusSemaphore);
+    
+    if (isChanged) {
+        __weak typeof(self) weakSelf = self;
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [[NSNotificationCenter defaultCenter] postNotificationName: AAReachabilityNetworkChangedNotification object: weakSelf];
+        });
+    }
+}
+
+- (void)updateCurrentReachabilityStatus {
     NSAssert(_reachabilityRef != NULL, @"currentNetworkStatus called with NULL SCNetworkReachabilityRef");
     SCNetworkReachabilityFlags flags;
     if (!SCNetworkReachabilityGetFlags(_reachabilityRef, &flags)) {
-        return NO;
+        return;
     }
     AANetworkStatus status = [self networkStatusForFlags:flags];
-    BOOL isChanged = NO;
-    dispatch_semaphore_wait(_statusSemaphore, DISPATCH_TIME_FOREVER);
-    isChanged = _currentReachabilityStatus != status;
-    _currentReachabilityStatus = status;
-    dispatch_semaphore_signal(_statusSemaphore);
-    return isChanged;
+    [self setCurrentReachabilityStatus:status];
 }
 
 - (AANetworkStatus)networkStatusForFlags:(SCNetworkReachabilityFlags)flags {
@@ -208,6 +244,22 @@ static void ReachabilityCallback(SCNetworkReachabilityRef target, SCNetworkReach
     }
     
     return AANetworkStatus4G;
+}
+
+- (void)radioAccessChanged {
+    dispatch_async([[self class] aaReachabilityQueue], ^{
+        [self updateCurrentReachabilityStatus];
+    });
+}
+
+#pragma mark - GCD
++ (dispatch_queue_t)aaReachabilityQueue {
+    static dispatch_once_t onceToken;
+    static dispatch_queue_t queue;
+    dispatch_once(&onceToken, ^{
+        queue = dispatch_queue_create("AAReachabilitySerialQueue", DISPATCH_QUEUE_SERIAL);
+    });
+    return queue;
 }
 
 @end

@@ -36,7 +36,7 @@ TODO: Add long description of the pod here.
   #   'AAReachability' => ['AAReachability/Assets/*.png']
   # }
 
-  # s.public_header_files = 'Pod/Classes/**/*.h'
+  s.public_header_files = ['Pod/Classes/**/AAReachability.h']
   # s.frameworks = 'UIKit', 'MapKit'
   # s.dependency 'AFNetworking', '~> 2.3'
 end

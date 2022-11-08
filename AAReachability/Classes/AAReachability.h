@@ -39,8 +39,16 @@ typedef NS_ENUM(NSUInteger, AANetworkStatus) {
  */
 + (instancetype)reachabilityForInternetConnection;
 
+/*!
+ * WWAN may be available, but not active until a connection has been established. WiFi may require a connection for VPN on Demand.
+ */
+- (BOOL)connectionRequired;
+
+/// 当前网络状态，实际为缓存值，非耗时操作
 - (AANetworkStatus)currentReachabilityStatus;
 
+/// 初始化，APP启动时调用，子线程预热
++ (void)setup;
 
 @end
 
