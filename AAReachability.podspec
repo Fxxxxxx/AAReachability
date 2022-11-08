@@ -18,14 +18,14 @@ Pod::Spec.new do |s|
 #   * Finally, don't worry about the indent, CocoaPods strips it!
 
   s.description      = <<-DESC
-TODO: Add long description of the pod here.
+    "支持5G识别的网络状态监听工具"
                        DESC
 
-  s.homepage         = 'https://github.com/AaronFeng/AAReachability'
+  s.homepage         = 'https://github.com/Fxxxxxx/AAReachability'
   # s.screenshots     = 'www.example.com/screenshots_1', 'www.example.com/screenshots_2'
   s.license          = { :type => 'MIT', :file => 'LICENSE' }
-  s.author           = { 'AaronFeng' => 'fengjiang04@meituan.com' }
-  s.source           = { :git => 'https://github.com/AaronFeng/AAReachability.git', :tag => s.version.to_s }
+  s.author           = { 'AaronFeng' => 'aaronfeng1993@163.com' }
+  s.source           = { :git => 'https://github.com/Fxxxxxx/AAReachability.git', :tag => s.version.to_s }
   # s.social_media_url = 'https://twitter.com/<TWITTER_USERNAME>'
 
   s.ios.deployment_target = '10.0'
