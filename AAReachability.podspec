@@ -9,7 +9,7 @@
 Pod::Spec.new do |s|
   s.name             = 'AAReachability'
   s.version          = '0.1.0'
-  s.summary          = 'A short description of AAReachability.'
+  s.summary          = 'iOS reachability tool that support 5G'
 
 # This description is used to generate tags and improve search results.
 #   * Think: What does it do? Why did you write it? What is the focus?
@@ -17,9 +17,9 @@ Pod::Spec.new do |s|
 #   * Write the description between the DESC delimiters below.
 #   * Finally, don't worry about the indent, CocoaPods strips it!
 
-  s.description      = <<-DESC
-    "支持5G识别的网络状态监听工具"
-                       DESC
+#  s.description      = <<-DESC
+#    "支持5G识别的网络状态监听工具"
+#                       DESC
 
   s.homepage         = 'https://github.com/Fxxxxxx/AAReachability'
   # s.screenshots     = 'www.example.com/screenshots_1', 'www.example.com/screenshots_2'
@@ -36,7 +36,7 @@ Pod::Spec.new do |s|
   #   'AAReachability' => ['AAReachability/Assets/*.png']
   # }
 
-  s.public_header_files = ['Pod/Classes/**/AAReachability.h']
+  s.public_header_files = ['AAReachability/Classes/**/AAReachability.h']
   # s.frameworks = 'UIKit', 'MapKit'
   # s.dependency 'AFNetworking', '~> 2.3'
 end

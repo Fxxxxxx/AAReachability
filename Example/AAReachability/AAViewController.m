@@ -22,8 +22,10 @@
     
     for (NSUInteger i = 0; i < 100; i++) {
         dispatch_async(dispatch_get_global_queue(0, 0), ^{
+            NSTimeInterval interval = CACurrentMediaTime();
             AANetworkStatus status = AAReachabilityCurrentStatus;
-            NSLog(@"%lu", status);
+            interval = CACurrentMediaTime() - interval;
+            NSLog(@"%lu, %.2f ms", status, interval * 1000);
         });
     }
     
