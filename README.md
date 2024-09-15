@@ -9,6 +9,24 @@
 
 To run the example project, clone the repo, and run `pod install` from the Example directory first.
 
+```
+
+// the network status define
+typedef NS_ENUM(NSUInteger, AANetworkStatus) {
+    AANetworkStatusOffline = 0,
+    AANetworkStatusWifi = 1,
+    AANetworkStatus2G = 2,
+    AANetworkStatus3G = 3,
+    AANetworkStatus4G = 4,
+    AANetworkStatus5G = 5
+};
+
+// usage example
+AANetworkStatus status = [[AAReachability sharedInstance] currentReachabilityStatus];
+
+
+```
+
 ## Requirements
 
 ## Installation
