@@ -7,17 +7,12 @@
 //
 
 #import "AAAppDelegate.h"
-#import <AAReachability/AAReachability.h>
 
 @implementation AAAppDelegate
 
 - (BOOL)application:(UIApplication *)application didFinishLaunchingWithOptions:(NSDictionary *)launchOptions
 {
-    // Override point for customization after application launch.
-    
-    // app 启动阶段，调用初始化方法，子线程预热监听服务，防止主线程调用ANR
-    [AAReachability setup];
-    
+    // Override point for customization after application launch.    
     return YES;
 }
 

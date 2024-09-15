@@ -6,105 +6,98 @@
 //
 
 #import "AAReachability.h"
+#import <stdatomic.h>
 #import <netinet/in.h>
 #import <SystemConfiguration/SystemConfiguration.h>
-#import <CoreTelephony/CTTelephonyNetworkInfo.h>
-
 
 @interface AAReachability ()
-- (void)updateCurrentReachabilityStatus;
-+ (dispatch_queue_t)aaReachabilityQueue;
+- (void)updateReachabilityFlags:(SCNetworkReachabilityFlags)flags;
 @end
 
 static void ReachabilityCallback(SCNetworkReachabilityRef target, SCNetworkReachabilityFlags flags, void* info) {
-#pragma unused (target, flags)
-    NSCAssert(info != NULL, @"info was NULL in ReachabilityCallback");
-    NSCAssert([(__bridge NSObject*) info isKindOfClass: [AAReachability class]], @"info was wrong class in ReachabilityCallback");
-
-    AAReachability* noteObject = (__bridge AAReachability *)info;
-    dispatch_async([AAReachability aaReachabilityQueue], ^{
-        [noteObject updateCurrentReachabilityStatus];
-    });
+    AAReachability *noteObject = (__bridge AAReachability *)info;
+    if ([noteObject isKindOfClass:AAReachability.class]) {
+        [noteObject updateReachabilityFlags:flags];
+    }
 }
 
 @implementation AAReachability {
+    dispatch_queue_t _queue;
+    void *_specificKey;
+    
     SCNetworkReachabilityRef _reachabilityRef;
-    AANetworkStatus _currentReachabilityStatus;
-    dispatch_semaphore_t _statusSemaphore;
+    CTTelephonyNetworkInfo *_networkInfo;
+    atomic_uint _currentReachabilityStatus;
 }
 
 #pragma mark - init
-+ (instancetype)reachabilityWithHostName:(NSString *)hostName {
-    SCNetworkReachabilityRef reachability = SCNetworkReachabilityCreateWithName(NULL, [hostName UTF8String]);
-    return [[self alloc] initWithRef:reachability];
-}
 
-+ (instancetype)reachabilityWithAddress:(const struct sockaddr *)hostAddress {
-    SCNetworkReachabilityRef reachability = SCNetworkReachabilityCreateWithAddress(kCFAllocatorDefault, hostAddress);
-    return [[self alloc] initWithRef:reachability];
-}
-
-+ (instancetype)reachabilityForInternetConnection {
-    struct sockaddr_in zeroAddress;
-    bzero(&zeroAddress, sizeof(zeroAddress));
-    zeroAddress.sin_len = sizeof(zeroAddress);
-    zeroAddress.sin_family = AF_INET;
-    
-    static dispatch_once_t onceToken;
++ (instancetype)sharedInstance {
     static id instance = nil;
+    static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
-        instance = [self reachabilityWithAddress: (const struct sockaddr *) &zeroAddress];
+        instance = [self new];
     });
     return instance;
 }
 
-- (instancetype)initWithRef:(SCNetworkReachabilityRef)ref {
-    if (ref == NULL) {
-        return NULL;
-    }
-    self = [super init];
-    if (self) {
-        _reachabilityRef = ref;
-        _statusSemaphore = dispatch_semaphore_create(1);
-        [self updateCurrentReachabilityStatus];
-        if (![self startNotifier]) {
-            [self startNotifier];
-        }
+- (instancetype)init {
+    if (self = [super init]) {
+        _queue = dispatch_queue_create("com.queue.AAReachability", DISPATCH_QUEUE_SERIAL);
+        _specificKey = &_specificKey;
+        void *nonNullPointer = (__bridge void *)self;
+        dispatch_queue_set_specific(_queue, _specificKey, nonNullPointer, nil);
+        
+        struct sockaddr_in zeroAddress;
+        bzero(&zeroAddress, sizeof(zeroAddress));
+        zeroAddress.sin_len = sizeof(zeroAddress);
+        zeroAddress.sin_family = AF_INET;
+        _reachabilityRef = SCNetworkReachabilityCreateWithAddress(kCFAllocatorDefault, (const struct sockaddr *) &zeroAddress);
+        _networkInfo = [CTTelephonyNetworkInfo new];
         
         // add notification observer
+        [self startNotifier];
         if (@available(iOS 12.0, *)) {
-            [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(radioAccessChanged) name:CTServiceRadioAccessTechnologyDidChangeNotification object:nil];
+            [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(radioAccessChanged:) name:CTServiceRadioAccessTechnologyDidChangeNotification object:nil];
         } else {
-            [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(radioAccessChanged) name:CTRadioAccessTechnologyDidChangeNotification object:nil];
+            [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(radioAccessChanged:) name:CTRadioAccessTechnologyDidChangeNotification object:nil];
         }
-    } else {
-        CFRelease(ref);
+        
+        // initial status
+        _currentReachabilityStatus = AANetworkStatusOffline;
+        SCNetworkReachabilityFlags flags;
+        if (SCNetworkReachabilityGetFlags(_reachabilityRef, &flags)) {
+            dispatch_sync(_queue, ^{
+                [self updateReachabilityFlags:flags];
+            });
+        }
     }
     return self;
 }
 
-- (BOOL)connectionRequired {
-    NSAssert(_reachabilityRef != NULL, @"connectionRequired called with NULL reachabilityRef");
-    SCNetworkReachabilityFlags flags;
-    if (SCNetworkReachabilityGetFlags(_reachabilityRef, &flags)) {
-        return (flags & kSCNetworkReachabilityFlagsConnectionRequired);
-    }
-    return NO;
+- (CTTelephonyNetworkInfo *)telephonyNetworkInfo {
+    return _networkInfo;
 }
 
-#pragma mark - setup
-+ (void)setup {
-    dispatch_async([self aaReachabilityQueue], ^{
-        [AAReachability reachabilityForInternetConnection];
-    });
++ (CTTelephonyNetworkInfo *)sharedTelephonyNetworkInfo {
+    return [self sharedInstance]->_networkInfo;
 }
 
 #pragma mark - dealloc
 - (void)dealloc {
     [self stopNotifier];
+    [NSNotificationCenter.defaultCenter removeObserver:self];
     if (_reachabilityRef != NULL) {
         CFRelease(_reachabilityRef);
     }
+}
+
+- (void)runInQueue:(dispatch_block_t)block {
+    if (dispatch_get_specific(_specificKey)) {
+        block();
+        return;
+    }
+    dispatch_async(_queue, block);
 }
 
 #pragma mark - Start and stop notifier
@@ -128,138 +121,114 @@ static void ReachabilityCallback(SCNetworkReachabilityRef target, SCNetworkReach
 
 #pragma mark - update status
 - (AANetworkStatus)currentReachabilityStatus {
-    AANetworkStatus result;
-    dispatch_semaphore_wait(_statusSemaphore, DISPATCH_TIME_FOREVER);
-    result = _currentReachabilityStatus;
-    dispatch_semaphore_signal(_statusSemaphore);
-    return result;
+    return _currentReachabilityStatus;
 }
 
-- (void)setCurrentReachabilityStatus:(AANetworkStatus)status {
-    BOOL isChanged = NO;
-    dispatch_semaphore_wait(_statusSemaphore, DISPATCH_TIME_FOREVER);
-    if (status != _currentReachabilityStatus) {
-        isChanged = YES;
-        _currentReachabilityStatus = status;
-    }
-    dispatch_semaphore_signal(_statusSemaphore);
-    
-    if (isChanged) {
-        __weak typeof(self) weakSelf = self;
-        dispatch_async(dispatch_get_main_queue(), ^{
-            [[NSNotificationCenter defaultCenter] postNotificationName: AAReachabilityNetworkChangedNotification object: weakSelf];
-        });
-    }
++ (AANetworkStatus)currentReachabilityStatus {
+    return [[self sharedInstance] currentReachabilityStatus];
 }
 
-- (void)updateCurrentReachabilityStatus {
-    NSAssert(_reachabilityRef != NULL, @"currentNetworkStatus called with NULL SCNetworkReachabilityRef");
-    SCNetworkReachabilityFlags flags;
-    if (!SCNetworkReachabilityGetFlags(_reachabilityRef, &flags)) {
+- (void)updateCurrentReachabilityStatus:(AANetworkStatus)status {
+    if (_currentReachabilityStatus == status) {
         return;
     }
-    AANetworkStatus status = [self networkStatusForFlags:flags];
-    [self setCurrentReachabilityStatus:status];
+    _currentReachabilityStatus = status;
+    __weak typeof(self) weakSelf = self;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [[NSNotificationCenter defaultCenter] postNotificationName: AAReachabilityNetworkChangedNotification object: weakSelf];
+    });
 }
 
-- (AANetworkStatus)networkStatusForFlags:(SCNetworkReachabilityFlags)flags {
-    if ((flags & kSCNetworkReachabilityFlagsReachable) == 0) {
-        // The target host is not reachable.
-        return AANetworkStatusOffline;
-    }
-
-    if ((flags & kSCNetworkReachabilityFlagsConnectionRequired) == 0) {
-        /*
-         If the target host is reachable and no connection is required then we'll assume (for now) that you're on Wi-Fi...
-         */
-        return AANetworkStatusWifi;
-    }
-
-    if ((((flags & kSCNetworkReachabilityFlagsConnectionOnDemand ) != 0) ||
-        (flags & kSCNetworkReachabilityFlagsConnectionOnTraffic) != 0)) {
-        /*
-         ... and the connection is on-demand (or on-traffic) if the calling application is using the CFSocketStream or higher APIs...
-         */
-
-        if ((flags & kSCNetworkReachabilityFlagsInterventionRequired) == 0) {
-            /*
-             ... and no [user] intervention is needed...
-             */
-            return AANetworkStatusWifi;
+- (void)updateReachabilityFlags:(SCNetworkReachabilityFlags)flags {
+    [self runInQueue:^{
+        if ((flags & kSCNetworkReachabilityFlagsReachable) == 0) {
+            [self updateCurrentReachabilityStatus:AANetworkStatusOffline];
+            return;
         }
-    }
-
-    if ((flags & kSCNetworkReachabilityFlagsIsWWAN) == kSCNetworkReachabilityFlagsIsWWAN) {
-        /*
-         ... but WWAN connections are OK if the calling application is using the CFNetwork APIs.
-         */
-        return [self getCurrentWwanStatus];
-    }
-    
-    return AANetworkStatusOffline;
-}
-
-- (AANetworkStatus)getCurrentWwanStatus {
-    static dispatch_once_t onceToken;
-    static CTTelephonyNetworkInfo *info = nil;
-    dispatch_once(&onceToken, ^{
-        info = [[CTTelephonyNetworkInfo alloc] init];
-    });
-    
-    NSString *status = nil;
-    if (@available(iOS 12.0, *)) {
-        NSDictionary *dic = [info.serviceCurrentRadioAccessTechnology copy];
-        status = [dic allValues].firstObject;
-    } else {
-        status = info.currentRadioAccessTechnology;
-    }
-    
-    if (![status isKindOfClass:NSString.class] ||
-        status.length <= 0) {
-        return AANetworkStatus4G;
-    }
-    
-    if ([status isEqualToString:CTRadioAccessTechnologyGPRS] ||
-        [status isEqualToString:CTRadioAccessTechnologyEdge] ||
-        [status isEqualToString:CTRadioAccessTechnologyCDMA1x]) {
-        return AANetworkStatus2G;
-    }
-    if ([status isEqualToString:CTRadioAccessTechnologyHSDPA] ||
-        [status isEqualToString:CTRadioAccessTechnologyWCDMA] ||
-        [status isEqualToString:CTRadioAccessTechnologyHSUPA] ||
-        [status isEqualToString:CTRadioAccessTechnologyCDMAEVDORev0] ||
-        [status isEqualToString:CTRadioAccessTechnologyCDMAEVDORevA] ||
-        [status isEqualToString:CTRadioAccessTechnologyCDMAEVDORevB] ||
-        [status isEqualToString:CTRadioAccessTechnologyeHRPD]) {
-        return AANetworkStatus3G;
-    }
-    if ([status isEqualToString:CTRadioAccessTechnologyLTE]) {
-        return AANetworkStatus4G;
-    }
-    if (@available(iOS 14.1, *)) {
-        if ([status isEqualToString:CTRadioAccessTechnologyNR] ||
-            [status isEqualToString:CTRadioAccessTechnologyNRNSA]) {
-            return AANetworkStatus5G;
+        
+        if ((flags & kSCNetworkReachabilityFlagsConnectionRequired) == 0) {
+            [self updateCurrentReachabilityStatus:AANetworkStatusWifi];
+            return;
         }
-    }
-    
-    return AANetworkStatus4G;
+        
+        if ((((flags & kSCNetworkReachabilityFlagsConnectionOnDemand ) != 0) ||
+            (flags & kSCNetworkReachabilityFlagsConnectionOnTraffic) != 0)) {
+            if ((flags & kSCNetworkReachabilityFlagsInterventionRequired) == 0) {
+                [self updateCurrentReachabilityStatus:AANetworkStatusWifi];
+                return;
+            }
+        }
+        
+        if ((flags & kSCNetworkReachabilityFlagsIsWWAN) == kSCNetworkReachabilityFlagsIsWWAN) {
+            [self updateRadioAccess:nil];
+            return;
+        }
+        
+        [self updateCurrentReachabilityStatus:AANetworkStatusOffline];
+    }];
 }
 
-- (void)radioAccessChanged {
-    dispatch_async([[self class] aaReachabilityQueue], ^{
-        [self updateCurrentReachabilityStatus];
-    });
+
+- (void)updateRadioAccess:(NSString *)identifier {
+    [self runInQueue:^{
+        NSString *radioAccess = nil;
+        if (@available(iOS 12.0, *)) {
+            NSDictionary *dic = [self->_networkInfo.serviceCurrentRadioAccessTechnology copy];
+            NSString *key = [identifier copy];
+            if (key.length <= 0) {
+                if (@available(iOS 13.0, *)) {
+                    key = self->_networkInfo.dataServiceIdentifier;
+                }
+            }
+            if (key.length > 0) {
+                radioAccess = [dic objectForKey:key];
+            }
+            if (radioAccess.length <= 0) {
+                radioAccess = [dic.allValues firstObject];
+            }
+        } else {
+            radioAccess = [self->_networkInfo.currentRadioAccessTechnology copy];
+        }
+        
+        if (radioAccess.length > 0) {
+            return;
+        }
+        
+        if (@available(iOS 14.1, *)) {
+            if ([radioAccess isEqualToString:CTRadioAccessTechnologyNR] ||
+                [radioAccess isEqualToString:CTRadioAccessTechnologyNRNSA]) {
+                [self updateCurrentReachabilityStatus:AANetworkStatus5G];
+                return;
+            }
+        }
+        if ([radioAccess isEqualToString:CTRadioAccessTechnologyLTE]) {
+            [self updateCurrentReachabilityStatus:AANetworkStatus4G];
+            return;
+        }
+        if ([radioAccess isEqualToString:CTRadioAccessTechnologyHSDPA] ||
+            [radioAccess isEqualToString:CTRadioAccessTechnologyWCDMA] ||
+            [radioAccess isEqualToString:CTRadioAccessTechnologyHSUPA] ||
+            [radioAccess isEqualToString:CTRadioAccessTechnologyCDMAEVDORev0] ||
+            [radioAccess isEqualToString:CTRadioAccessTechnologyCDMAEVDORevA] ||
+            [radioAccess isEqualToString:CTRadioAccessTechnologyCDMAEVDORevB] ||
+            [radioAccess isEqualToString:CTRadioAccessTechnologyeHRPD]) {
+            [self updateCurrentReachabilityStatus:AANetworkStatus3G];
+            return;
+        }
+        if ([radioAccess isEqualToString:CTRadioAccessTechnologyGPRS] ||
+            [radioAccess isEqualToString:CTRadioAccessTechnologyEdge] ||
+            [radioAccess isEqualToString:CTRadioAccessTechnologyCDMA1x]) {
+            [self updateCurrentReachabilityStatus:AANetworkStatus2G];
+            return;
+        }
+    }];
 }
 
-#pragma mark - GCD
-+ (dispatch_queue_t)aaReachabilityQueue {
-    static dispatch_once_t onceToken;
-    static dispatch_queue_t queue;
-    dispatch_once(&onceToken, ^{
-        queue = dispatch_queue_create("AAReachabilitySerialQueue", DISPATCH_QUEUE_SERIAL);
-    });
-    return queue;
+- (void)radioAccessChanged:(NSNotification *)notification {
+    [self runInQueue:^{
+        [self updateRadioAccess: [notification.object isKindOfClass:NSString.class] ? notification.object : nil];
+    }];
 }
+
 
 @end
