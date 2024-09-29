@@ -63,14 +63,13 @@ static void ReachabilityCallback(SCNetworkReachabilityRef target, SCNetworkReach
             [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(radioAccessChanged:) name:CTRadioAccessTechnologyDidChangeNotification object:nil];
         }
         
+        [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(refreshReachabilityStatus) name:UIApplicationWillEnterForegroundNotification object:nil];
+        
         // initial status
         _currentReachabilityStatus = AANetworkStatusOffline;
-        SCNetworkReachabilityFlags flags;
-        if (SCNetworkReachabilityGetFlags(_reachabilityRef, &flags)) {
-            dispatch_sync(_queue, ^{
-                [self updateReachabilityFlags:flags];
-            });
-        }
+        dispatch_sync(_queue, ^{
+            [self refreshReachabilityStatus];
+        });
     }
     return self;
 }
@@ -111,7 +110,6 @@ static void ReachabilityCallback(SCNetworkReachabilityRef target, SCNetworkReach
     }
     return NO;
 }
-
 
 - (void)stopNotifier {
     if (_reachabilityRef != NULL) {
@@ -167,7 +165,6 @@ static void ReachabilityCallback(SCNetworkReachabilityRef target, SCNetworkReach
         [self updateCurrentReachabilityStatus:AANetworkStatusOffline];
     }];
 }
-
 
 - (void)updateRadioAccess:(NSString *)identifier {
     [self runInQueue:^{
@@ -230,5 +227,13 @@ static void ReachabilityCallback(SCNetworkReachabilityRef target, SCNetworkReach
     }];
 }
 
+- (void)refreshReachabilityStatus {
+    [self runInQueue:^{
+        SCNetworkReachabilityFlags flags;
+        if (SCNetworkReachabilityGetFlags(self->_reachabilityRef, &flags)) {
+            [self updateReachabilityFlags:flags];
+        }
+    }];
+}
 
 @end
