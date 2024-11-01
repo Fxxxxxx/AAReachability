@@ -8,7 +8,7 @@
 
 Pod::Spec.new do |s|
   s.name             = 'AAReachability'
-  s.version          = '1.0.1'
+  s.version          = '2.0.0'
   s.summary          = 'iOS reachability tool that support 5G'
 
 # This description is used to generate tags and improve search results.
@@ -28,7 +28,8 @@ Pod::Spec.new do |s|
   s.source           = { :git => 'https://github.com/Fxxxxxx/AAReachability.git', :tag => s.version.to_s }
   # s.social_media_url = 'https://twitter.com/<TWITTER_USERNAME>'
 
-  s.ios.deployment_target = '10.0'
+  s.swift_versions = '5.0'
+  s.ios.deployment_target = '12.0'
 
   s.source_files = 'AAReachability/Classes/**/*'
   
@@ -36,7 +37,7 @@ Pod::Spec.new do |s|
   #   'AAReachability' => ['AAReachability/Assets/*.png']
   # }
 
-  s.public_header_files = ['AAReachability/Classes/**/AAReachability.h']
-  # s.frameworks = 'UIKit', 'MapKit'
+#  s.public_header_files = ['AAReachability/Classes/**/AAReachability.h']
+   s.frameworks = 'Network', 'Foundation'
   # s.dependency 'AFNetworking', '~> 2.3'
 end
